@@ -63,25 +63,3 @@ project-folder/
 │   │-- dataset_metadata.json
 │   │-- confusion_matrices.json
 ```
-
-## How to run
-1. Train and save artifacts:
-   ```bash
-   python model/train_and_save_models.py
-   ```
-2. Launch Streamlit app:
-   ```bash
-   streamlit run app.py
-   ```
-
-## Streamlit features implemented
-- CSV dataset upload option (recommended: test data)
-- Model selection dropdown (all 6 models)
-- Display of evaluation metrics (Accuracy, AUC, Precision, Recall, F1, MCC)
-- Confusion matrix and classification report
-- Prediction preview table
-
-## Notes for submission
-- Include GitHub repository link and Streamlit app link in final submission PDF.
-- Include screenshot showing execution on BITS Virtual Lab.
-- Include this README content in the final submission PDF.
