@@ -5,6 +5,7 @@ from pathlib import Path
 
 import joblib
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 import streamlit as st
@@ -17,10 +18,10 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
     roc_auc_score,
+    roc_curve,
 )
 
-
-st.set_page_config(page_title="ML Assignment 2 - Breast Cancer Classifier", layout="wide")
+st.set_page_config(page_title="Breast Cancer Classification", layout="wide")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 MODEL_DIR = PROJECT_ROOT / "model"
@@ -36,12 +37,11 @@ MODEL_FILE_MAP = {
 }
 
 
-def load_model(selected_model: str):
-    model_path = MODEL_DIR / MODEL_FILE_MAP[selected_model]
-    return joblib.load(model_path)
+def load_model(name: str):
+    return joblib.load(MODEL_DIR / MODEL_FILE_MAP[name])
 
 
-def compute_metrics(y_true: pd.Series, y_pred: pd.Series, y_prob: pd.Series) -> dict[str, float]:
+def evaluate(y_true, y_pred, y_prob):
     return {
         "Accuracy": accuracy_score(y_true, y_pred),
         "AUC": roc_auc_score(y_true, y_prob),
@@ -52,104 +52,129 @@ def compute_metrics(y_true: pd.Series, y_pred: pd.Series, y_prob: pd.Series) -> 
     }
 
 
-def plot_confusion_matrix(y_true: pd.Series, y_pred: pd.Series) -> None:
-    cm = confusion_matrix(y_true, y_pred)
-    fig, ax = plt.subplots(figsize=(4.5, 3.5))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False, ax=ax)
-    ax.set_title("Confusion Matrix")
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    st.pyplot(fig)
-
-
-def main() -> None:
-    st.title("Machine Learning Assignment 2 - Classification Models")
+def main():
+    st.title("Breast Cancer Classification")
     st.write(
-        "Dataset: UCI Breast Cancer Wisconsin (Diagnostic). "
-        "Upload test CSV data or use bundled test split."
+        "This app evaluates six ML models on the UCI Breast Cancer Wisconsin (Diagnostic) dataset. "
+        "You can upload your own test CSV or use the bundled test split."
     )
 
     if not MODEL_DIR.exists():
-        st.error("Model directory is missing. Run model/train_and_save_models.py first.")
+        st.error("Model directory not found. Please run train_and_save_models.py first.")
         st.stop()
 
     metadata_path = MODEL_DIR / "dataset_metadata.json"
     if metadata_path.exists():
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        meta = json.loads(metadata_path.read_text())
         st.info(
-            f"Dataset instances: {metadata['instances']} | "
-            f"Features: {metadata['features']} | "
-            f"Target labels: {', '.join(metadata['target_names'])}"
+            f"Dataset: {meta['dataset_name']} | "
+            f"{meta['instances']} samples, {meta['features']} features | "
+            f"Classes: {', '.join(meta['target_names'])}"
         )
 
-    st.subheader("Model Comparison (Precomputed on held-out test set)")
-    metrics_table_path = MODEL_DIR / "model_metrics.csv"
-    if metrics_table_path.exists():
-        metrics_df = pd.read_csv(metrics_table_path)
-        st.dataframe(metrics_df, use_container_width=True)
-
-    st.subheader("Interactive Evaluation")
-
-    selected_model = st.selectbox("Select model", list(MODEL_FILE_MAP.keys()))
-    uploaded_file = st.file_uploader("Upload CSV test data", type=["csv"])
-
+    uploaded_file = st.file_uploader("Upload test CSV (optional)", type=["csv"])
     default_test_df = pd.read_csv(DATA_DIR / "test_data.csv")
 
     if uploaded_file is not None:
         eval_df = pd.read_csv(uploaded_file)
-        st.success("Uploaded dataset loaded successfully.")
+        st.success("Uploaded file loaded.")
     else:
         eval_df = default_test_df.copy()
-        st.caption("Using bundled test split (data/test_data.csv).")
+        st.caption("Using the bundled test split.")
 
-    expected_feature_cols = [col for col in default_test_df.columns if col != "target"]
+    feature_cols = [c for c in default_test_df.columns if c != "target"]
 
-    missing_cols = [col for col in expected_feature_cols if col not in eval_df.columns]
-    if missing_cols:
-        st.error(
-            "Uploaded CSV is missing required feature columns: " + ", ".join(missing_cols)
-        )
+    missing = [c for c in feature_cols if c not in eval_df.columns]
+    if missing:
+        st.error("Uploaded CSV is missing columns: " + ", ".join(missing))
         st.stop()
 
-    model = load_model(selected_model)
-    X_eval = eval_df[expected_feature_cols]
-    y_pred = model.predict(X_eval)
+    has_labels = "target" in eval_df.columns
+    X_eval = eval_df[feature_cols]
+    y_true = eval_df["target"] if has_labels else None
 
-    st.write(f"Predictions generated using **{selected_model}**")
+    st.divider()
+    st.subheader("All-Model Comparison")
 
-    if "target" in eval_df.columns:
-        y_true = eval_df["target"]
-        y_prob = model.predict_proba(X_eval)[:, 1]
-        metric_values = compute_metrics(y_true, y_pred, y_prob)
+    all_metrics = []
+    model_predictions = {}
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Accuracy", f"{metric_values['Accuracy']:.4f}")
-            st.metric("AUC", f"{metric_values['AUC']:.4f}")
-        with col2:
-            st.metric("Precision", f"{metric_values['Precision']:.4f}")
-            st.metric("Recall", f"{metric_values['Recall']:.4f}")
-        with col3:
-            st.metric("F1", f"{metric_values['F1']:.4f}")
-            st.metric("MCC", f"{metric_values['MCC']:.4f}")
+    for name in MODEL_FILE_MAP:
+        model = load_model(name)
+        preds = model.predict(X_eval)
+        probs = model.predict_proba(X_eval)[:, 1]
+        model_predictions[name] = {"preds": preds, "probs": probs}
 
-        st.subheader("Confusion Matrix")
-        plot_confusion_matrix(y_true, y_pred)
+        if has_labels:
+            metrics = evaluate(y_true, preds, probs)
+            metrics["Model"] = name
+            all_metrics.append(metrics)
 
-        st.subheader("Classification Report")
-        report = classification_report(y_true, y_pred, output_dict=True)
-        report_df = pd.DataFrame(report).transpose()
-        st.dataframe(report_df, use_container_width=True)
+    if has_labels and all_metrics:
+        metrics_df = pd.DataFrame(all_metrics)
+        metrics_df = metrics_df[["Model", "Accuracy", "AUC", "Precision", "Recall", "F1", "MCC"]]
+        metrics_df = metrics_df.sort_values("Accuracy", ascending=False).reset_index(drop=True)
+
+        styled = metrics_df.style.format(
+            {col: "{:.4f}" for col in ["Accuracy", "AUC", "Precision", "Recall", "F1", "MCC"]}
+        ).background_gradient(cmap="Greens", subset=["Accuracy", "AUC", "F1"])
+        st.dataframe(styled, use_container_width=True)
+
+        st.subheader("Confusion Matrices")
+        cols = st.columns(3)
+        for i, name in enumerate(MODEL_FILE_MAP):
+            with cols[i % 3]:
+                cm = confusion_matrix(y_true, model_predictions[name]["preds"])
+                fig, ax = plt.subplots(figsize=(3.5, 3))
+                sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False, ax=ax)
+                ax.set_title(name, fontsize=10)
+                ax.set_xlabel("Predicted")
+                ax.set_ylabel("Actual")
+                st.pyplot(fig)
+                plt.close(fig)
+
+        st.subheader("ROC Curves")
+        fig, ax = plt.subplots(figsize=(7, 5))
+        for name in MODEL_FILE_MAP:
+            fpr, tpr, _ = roc_curve(y_true, model_predictions[name]["probs"])
+            auc_val = roc_auc_score(y_true, model_predictions[name]["probs"])
+            ax.plot(fpr, tpr, label=f"{name} (AUC={auc_val:.3f})")
+        ax.plot([0, 1], [0, 1], "k--", alpha=0.4)
+        ax.set_xlabel("False Positive Rate")
+        ax.set_ylabel("True Positive Rate")
+        ax.set_title("ROC Comparison")
+        ax.legend(fontsize=8, loc="lower right")
+        st.pyplot(fig)
+        plt.close(fig)
+
+    st.divider()
+    st.subheader("Per-Model Deep Dive")
+
+    selected = st.selectbox("Pick a model to inspect", list(MODEL_FILE_MAP.keys()))
+    preds = model_predictions[selected]["preds"]
+    probs = model_predictions[selected]["probs"]
+
+    if has_labels:
+        metrics = evaluate(y_true, preds, probs)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Accuracy", f"{metrics['Accuracy']:.4f}")
+        c1.metric("AUC", f"{metrics['AUC']:.4f}")
+        c2.metric("Precision", f"{metrics['Precision']:.4f}")
+        c2.metric("Recall", f"{metrics['Recall']:.4f}")
+        c3.metric("F1", f"{metrics['F1']:.4f}")
+        c3.metric("MCC", f"{metrics['MCC']:.4f}")
+
+        st.write("**Classification Report**")
+        report = classification_report(y_true, preds, output_dict=True)
+        st.dataframe(pd.DataFrame(report).T, use_container_width=True)
     else:
-        st.warning(
-            "No 'target' column in uploaded file. Metrics and confusion matrix require labels."
-        )
-
-    preview_df = eval_df.copy()
-    preview_df["prediction"] = y_pred
+        st.warning("No target column found. Upload a CSV with a 'target' column to see metrics.")
 
     st.subheader("Prediction Preview")
-    st.dataframe(preview_df.head(20), use_container_width=True)
+    preview = eval_df.copy()
+    preview["prediction"] = preds
+    st.dataframe(preview.head(20), use_container_width=True)
 
 
 if __name__ == "__main__":
